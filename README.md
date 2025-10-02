@@ -1,55 +1,217 @@
-# Introduction
-A Dockercontainer that automatically downloads, converts your audible audiobooks from aax to m4b.
+# Audible Audiobook Downloader
 
-The Programm checks every 6h if there are new books in you library.
+A robust Docker container that automatically downloads and converts your Audible audiobooks from AAX/AAXC to M4B format with built-in integrity verification and self-healing capabilities.
 
-Audiobooks can be either be just their file or ordered directly into folders. This can benefical for large libraries or usage with other programs.
-The directory structure uses the [audiobookshelf](https://www.audiobookshelf.org/docs#book-directory-structure) convention. 
-Author/Series/audiobook.m4b or Author/audiobook.m4b if a Series doesn't exist.
+## ✨ Key Features
 
-# Run Image
+- **🔄 Automatic Downloads**: Checks every 6 hours for new books in your library
+- **🔧 Self-Healing**: Built-in integrity verification automatically fixes corrupted files
+- **📚 Smart Organization**: Uses [AudioBookShelf](https://www.audiobookshelf.org/docs#book-directory-structure) directory structure
+- **🛡️ Robust Error Handling**: Gracefully handles failures and continues processing
+- **📊 Integrity Monitoring**: Comprehensive verification tools with automatic fixes
+- **💾 DRM Removal**: Converts AAX/AAXC files using your account's activation bytes
 
-## Build from source
+## 📁 Directory Structure
 
-Run in the Directory with the Dockerfile.
 ```
-docker build -t audible-downloader .
-```
-
-List all images.
-```
-docker images ls
-```
-
-replace the container id with the your image hash
- 
-```
-docker run -d \
-	--name=audiobookDownloader \
-	-e AUDIOBOOK_FOLDERS='True' \
-	-v /path/to/audiobookDownloader/config:/config \
-	-v /path/to/audiobookDownloader/audiobooks:/audiobooks \
-	container id
+Author/
+├── Series/
+│   ├── 1 - Year - Book Title {Narrator}/
+│   │   └── book.m4b
+│   └── 2 - Year - Book Title {Narrator}/
+└── Standalone Book/
+    └── book.m4b
 ```
 
-## First time running
-Run the container by one of the given methods.
+# 🚀 Quick Start
 
-List all running containers:
+## Build and Run
 
-`docker ps`
+1. **Build the Docker image**:
 
-Use the container shell:
+   ```bash
+   docker build -t audible-downloader .
+   ```
 
-`docker exec -it`
+2. **Run the container**:
 
-write:
+   ```bash
+   docker run -d \
+       --name=audiobookDownloader \
+       -e AUDIOBOOK_FOLDERS='True' \
+       -v /path/to/config:/config \
+       -v /path/to/audiobooks:/audiobooks \
+       audible-downloader
+   ```
 
-`audible quickstart`
+   **Windows PowerShell example**:
 
-and answer the prompts.
-The name of the auth file name doesn't matter but it can't be encrypted.
-Login over the browser and copy the new URL back into the console after completing the captcha
+   ```powershell
+   docker run -d `
+       --name=audiobookDownloader `
+       -e AUDIOBOOK_FOLDERS='True' `
+       -v "C:\path\to\config:/config" `
+       -v "C:\path\to\audiobooks:/audiobooks" `
+       audible-downloader
+   ```
 
-## Build it yourself
-`docker build -t audibleDownloader:1.0 .`
+## 🔐 Initial Setup
+
+1. **Start the container** using the commands above
+
+2. **Configure Audible authentication**:
+
+   ```bash
+   docker exec -it audiobookDownloader audible quickstart
+   ```
+
+   - Follow the prompts to authenticate with your Audible account
+   - Choose browser login when prompted
+   - Complete any captcha challenges
+   - The auth file will be saved automatically
+
+3. **Verify setup**:
+   ```bash
+   docker logs audiobookDownloader
+   ```
+
+# 🔍 Integrity Verification Utility
+
+The container includes a powerful integrity verification tool that can check and automatically fix issues with your audiobook collection.
+
+## Manual Verification
+
+### Basic Usage
+
+**Check collection health**:
+
+```powershell
+.\verify_integrity.ps1
+```
+
+**Detailed verification**:
+
+```powershell
+.\verify_integrity.ps1 -Verbose
+```
+
+**Quick check (skip file validation)**:
+
+```powershell
+.\verify_integrity.ps1 -Quick
+```
+
+### Automatic Fixes
+
+**Preview what would be fixed**:
+
+```powershell
+.\verify_integrity.ps1 -DryRun -Fix
+```
+
+**Automatically fix all issues**:
+
+```powershell
+.\verify_integrity.ps1 -Fix
+```
+
+**Detailed verification with auto-fix**:
+
+```powershell
+.\verify_integrity.ps1 -Verbose -Fix
+```
+
+### Direct Docker Usage
+
+```bash
+# Basic verification
+docker exec -it audiobookDownloader python /app/verify_integrity.py
+
+# Detailed output
+docker exec -it audiobookDownloader python /app/verify_integrity.py --verbose
+
+# Auto-fix issues
+docker exec -it audiobookDownloader python /app/verify_integrity.py --fix
+
+# Preview fixes
+docker exec -it audiobookDownloader python /app/verify_integrity.py --dry-run --fix
+```
+
+## What Gets Verified
+
+- ✅ **File Existence**: Ensures all "downloaded" books have actual files
+- ✅ **File Integrity**: Validates audio files aren't corrupted using FFprobe
+- ✅ **Database Consistency**: Checks for mismatched records
+- ✅ **Orphaned Files**: Finds audiobook files not tracked in database
+- ✅ **Path Validation**: Verifies correct directory structure
+
+## Auto-Fix Capabilities
+
+- 🔧 **Missing Files**: Resets download status for re-downloading
+- 🔧 **Corrupted Files**: Deletes bad files and marks for re-download
+- 🔧 **Database Issues**: Updates inconsistent records
+- 🔧 **File Conflicts**: Handles overwrites during re-downloads
+
+## Built-in Automation
+
+The integrity verification runs automatically **every 6 hours** as part of the download cycle:
+
+1. Update library from Audible
+2. **🔍 Run integrity check and auto-fix**
+3. Download new/fixed audiobooks
+4. Convert and organize files
+5. Wait 6 hours and repeat
+
+# 🛠️ Advanced Usage
+
+## Environment Variables
+
+- `AUDIOBOOK_FOLDERS='True'`: Enable organized folder structure (recommended)
+- `AUDIBLE_CONFIG_DIR=/config`: Configuration directory (default)
+
+## Container Management
+
+**View logs**:
+
+```bash
+docker logs audiobookDownloader
+```
+
+**Follow live logs**:
+
+```bash
+docker logs -f audiobookDownloader
+```
+
+**Stop container**:
+
+```bash
+docker stop audiobookDownloader
+```
+
+**Restart container**:
+
+```bash
+docker restart audiobookDownloader
+```
+
+## Manual Download Cycle
+
+Force an immediate download cycle:
+
+```bash
+docker exec -it audiobookDownloader python /app/audiobookDownloader.py
+```
+
+# 🔧 Troubleshooting
+
+## Common Issues
+
+**Authentication Problems**: Re-run `audible quickstart` in the container
+**Download Failures**: Check logs and verify internet connectivity  
+**Corrupted Files**: Run `.\verify_integrity.ps1 -Fix` to auto-repair
+**Missing Books**: Integrity verification will reset them for re-download
+
+## Support
+
+This enhanced version includes comprehensive error handling and self-healing capabilities. Most issues are automatically detected and resolved.
