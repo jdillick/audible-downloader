@@ -96,8 +96,14 @@ class FileProcessor:
         """Convert and organize the audiobook file."""
         try:
             src_path = os.path.join(AUDIOBOOK_DOWNLOAD_DIR, audiobook_file)
-            is_aax = audiobook_file.endswith('.aax')
-            base_name = audiobook_file[:-4] if not is_aax else audiobook_file[:-3]
+            
+            # Remove file extension to get base name
+            if audiobook_file.endswith('.aax'):
+                base_name = audiobook_file[:-4]  # Remove .aax (4 characters)
+            elif audiobook_file.endswith('.aaxc'):
+                base_name = audiobook_file[:-5]  # Remove .aaxc (5 characters)
+            else:
+                base_name = os.path.splitext(audiobook_file)[0]  # Generic fallback
             
             # Create destination folder if using folder structure
             if USE_FOLDERS:
@@ -108,6 +114,9 @@ class FileProcessor:
                 dest_path = os.path.join(dest_folder, base_name + ".m4b")
             else:
                 dest_path = os.path.join(AUDIOBOOK_DIR, base_name + ".m4b")
+            
+            print(f"Converting {src_path} -> {dest_path}")
+            sys.stdout.flush()
             
             # Remove existing file if it exists
             if os.path.exists(dest_path):
@@ -148,10 +157,14 @@ class FileProcessor:
             print(f"Converting audiobook: {os.path.basename(src_path)}")
             sys.stdout.flush()
             
+            # Get activation bytes from the API
+            from audible_api import audible_api
+            activation_bytes = audible_api.activation_bytes
+            
             # FFmpeg conversion command
             cmd = [
-                "ffmpeg", "-y", "-activation_bytes", 
-                # Note: You'll need to get activation bytes from audible_api
+                "ffmpeg", "-y", 
+                "-activation_bytes", activation_bytes,
                 "-i", src_path,
                 "-c", "copy",
                 dest_path

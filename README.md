@@ -39,6 +39,7 @@ Author/
    docker run -d \
        --name=audiobookDownloader \
        -e AUDIOBOOK_FOLDERS='True' \
+       -e SLEEP_DURATION='2h' \
        -v /path/to/config:/config \
        -v /path/to/audiobooks:/audiobooks \
        audible-downloader
@@ -168,6 +169,7 @@ The integrity verification runs automatically **every 6 hours** as part of the d
 
 - `AUDIOBOOK_FOLDERS='True'`: Enable organized folder structure (recommended)
 - `AUDIBLE_CONFIG_DIR=/config`: Configuration directory (default)
+- `SLEEP_DURATION='6h'`: Time between download checks (default: 6h, supports: s/m/h/d)
 
 ## Container Management
 

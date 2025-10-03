@@ -25,7 +25,7 @@ class IntegrityChecker:
             if result.returncode >= 0:  # 0 = no issues, >0 = issues found and fixed, -1 = error
                 # Show the output from the integrity check
                 if result.stdout.strip():
-                    for line in result.stdout.strip().split('\\n'):
+                    for line in result.stdout.strip().split('\n'):
                         if line.strip():
                             print(f"   {line}")
                             sys.stdout.flush()
