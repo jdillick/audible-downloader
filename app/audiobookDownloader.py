@@ -26,8 +26,27 @@ with con:
 				narrators TEXT,
 				series_sequence INT,
 				release_date TEXT,
-				downloaded INT
+				downloaded INT,
+				is_downloadable INT DEFAULT 1,
+				restriction_reason TEXT,
+				last_download_attempt TEXT
 		);""")
+	
+	# Migrate existing table to add new columns if they don't exist
+	try:
+		con.execute("ALTER TABLE audiobooks ADD COLUMN is_downloadable INT DEFAULT 1")
+	except sqlite3.OperationalError:
+		pass  # Column already exists
+	
+	try:
+		con.execute("ALTER TABLE audiobooks ADD COLUMN restriction_reason TEXT")
+	except sqlite3.OperationalError:
+		pass  # Column already exists
+		
+	try:
+		con.execute("ALTER TABLE audiobooks ADD COLUMN last_download_attempt TEXT")
+	except sqlite3.OperationalError:
+		pass  # Column already exists
 
 # program exits and errors if it can't get the activation bytes
 subprocess.run(["audible", "activation-bytes"])
@@ -62,10 +81,10 @@ def update_titles():
 					try:
 						values = [row.get('asin', ''), row.get('title', ''), row.get('subtitle', ''), 
 								 row.get('authors', ''), row.get('series_title', ''), row.get('narrators', ''), 
-								 row.get('series_sequence', None), row.get('release_date', ''), 0]
+								 row.get('series_sequence', None), row.get('release_date', ''), 0, 1, None, None]
 						
 						if cur.execute('SELECT * FROM audiobooks WHERE asin=?', [row.get('asin', '')]).fetchone() is None:
-							cur.execute('insert into audiobooks values(?, ?, ?, ?, ?, ?, ?, ?, ?)', values)
+							cur.execute('insert into audiobooks values(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', values)
 							print(f"Added new book to database: {row.get('title', 'Unknown')} (ASIN: {row.get('asin', 'Unknown')})")
 							sys.stdout.flush()
 							added_count += 1
@@ -87,6 +106,154 @@ def update_titles():
 			
 	except Exception as e:
 		print(f"Error in update_titles: {e}")
+		sys.stdout.flush()
+
+def check_downloadability():
+	"""Check and update downloadability status for books that haven't been checked."""
+	try:
+		print("🔍 Checking download restrictions for new books...")
+		sys.stdout.flush()
+		
+		with con:
+			cur = con.cursor()
+			# Get books that haven't been checked for downloadability yet
+			unchecked_books = cur.execute('''
+				SELECT asin, title FROM audiobooks 
+				WHERE is_downloadable = 1 AND restriction_reason IS NULL 
+				AND downloaded = 0
+				ORDER BY asin
+			''').fetchall()
+			
+			if not unchecked_books:
+				print("   All books already checked for download restrictions")
+				sys.stdout.flush()
+				return
+			
+			print(f"   Checking {len(unchecked_books)} books for download restrictions...")
+			sys.stdout.flush()
+			
+			# Check books in batches to avoid overwhelming the API
+			batch_size = 20
+			for i in range(0, len(unchecked_books), batch_size):
+				batch = unchecked_books[i:i+batch_size]
+				asins = [book[0] for book in batch]
+				asin_list = ','.join(asins)
+				
+				try:
+					# Get detailed API response with download restriction info
+					result = subprocess.run([
+						"audible", "api", "1.0/library",
+						"-p", f"asins={asin_list}",
+						"-p", "response_groups=product_desc,product_attrs",
+						"-f", "json"
+					], capture_output=True, text=True)
+					
+					if result.returncode == 0 and result.stdout:
+						api_data = json.loads(result.stdout)
+						
+						for item in api_data.get('items', []):
+							asin = item.get('asin')
+							title = item.get('title', 'Unknown')
+							is_ayce = item.get('is_ayce', False)
+							benefit_id = item.get('benefit_id')
+							
+							# Determine if book is downloadable
+							is_downloadable = 1
+							restriction_reason = None
+							
+							if is_ayce or benefit_id == "AYCL":
+								is_downloadable = 0
+								restriction_reason = "Audible Plus catalog book (streaming only)"
+								print(f"   ⚠️  {title} (ASIN: {asin}) - {restriction_reason}")
+								sys.stdout.flush()
+							else:
+								print(f"   ✅ {title} (ASIN: {asin}) - Downloadable")
+								sys.stdout.flush()
+							
+							# Update database
+							cur.execute('''
+								UPDATE audiobooks 
+								SET is_downloadable = ?, restriction_reason = ?
+								WHERE asin = ?
+							''', (is_downloadable, restriction_reason, asin))
+					else:
+						# Batch failed, try individual ASINs
+						print(f"   Batch API call failed, checking individual ASINs...")
+						sys.stdout.flush()
+						for asin, title in batch:
+							try:
+								individual_result = subprocess.run([
+									"audible", "api", "1.0/library",
+									"-p", f"asins={asin}",
+									"-p", "response_groups=product_desc,product_attrs",
+									"-f", "json"
+								], capture_output=True, text=True)
+								
+								if individual_result.returncode == 0 and individual_result.stdout:
+									api_data = json.loads(individual_result.stdout)
+									items = api_data.get('items', [])
+									
+									if items:
+										item = items[0]
+										is_ayce = item.get('is_ayce', False)
+										benefit_id = item.get('benefit_id')
+										
+										if is_ayce or benefit_id == "AYCL":
+											is_downloadable = 0
+											restriction_reason = "Audible Plus catalog book (streaming only)"
+											print(f"   ⚠️  {title} (ASIN: {asin}) - {restriction_reason}")
+										else:
+											is_downloadable = 1
+											restriction_reason = None
+											print(f"   ✅ {title} (ASIN: {asin}) - Downloadable")
+										
+										cur.execute('''
+											UPDATE audiobooks 
+											SET is_downloadable = ?, restriction_reason = ?
+											WHERE asin = ?
+										''', (is_downloadable, restriction_reason, asin))
+									else:
+										# No items returned - ASIN might be invalid or inaccessible
+										print(f"   ❓ {title} (ASIN: {asin}) - No API data available")
+										cur.execute('''
+											UPDATE audiobooks 
+											SET is_downloadable = ?, restriction_reason = ?
+											WHERE asin = ?
+										''', (0, "No API data available (may be invalid ASIN)", asin))
+								else:
+									# Individual API call also failed
+									print(f"   ❌ {title} (ASIN: {asin}) - API call failed")
+									cur.execute('''
+										UPDATE audiobooks 
+										SET is_downloadable = ?, restriction_reason = ?
+										WHERE asin = ?
+									''', (0, "API check failed", asin))
+									
+								sys.stdout.flush()
+							except Exception as individual_error:
+								print(f"   ❌ {title} (ASIN: {asin}) - Error: {individual_error}")
+								cur.execute('''
+									UPDATE audiobooks 
+									SET is_downloadable = ?, restriction_reason = ?
+									WHERE asin = ?
+								''', (0, f"Error during check: {individual_error}", asin))
+								sys.stdout.flush()
+				
+				except Exception as e:
+					print(f"   Error checking batch starting with {batch[0][0]}: {e}")
+					sys.stdout.flush()
+					# Mark these as checked but unknown
+					for asin, title in batch:
+						cur.execute('''
+							UPDATE audiobooks 
+							SET restriction_reason = ?
+							WHERE asin = ?
+						''', ("API check failed", asin))
+			
+			con.commit()
+			
+	except Exception as e:
+		print(f"Error in check_downloadability: {e}")
 		sys.stdout.flush()
 
 def run_integrity_check_and_fix():
@@ -184,17 +351,76 @@ def create_audiobook_folder(asin):
 
 def download_new_titles():
 	cur = con.cursor()
-	to_download = cur.execute('SELECT asin FROM audiobooks WHERE downloaded=?', [0]).fetchall()
-
-	for asin in to_download:
-		try:
-			print(f"Downloading audiobook with ASIN: {asin[0]}")
+	
+	# Get downloadable books only
+	downloadable_books = cur.execute('''
+		SELECT asin, title, restriction_reason 
+		FROM audiobooks 
+		WHERE downloaded = 0 AND is_downloadable = 1
+	''').fetchall()
+	
+	# Get and report non-downloadable books
+	restricted_books = cur.execute('''
+		SELECT asin, title, restriction_reason 
+		FROM audiobooks 
+		WHERE downloaded = 0 AND is_downloadable = 0
+	''').fetchall()
+	
+	if restricted_books:
+		print(f"\n📋 Skipping {len(restricted_books)} non-downloadable books:")
+		sys.stdout.flush()
+		for asin, title, reason in restricted_books:
+			print(f"   ⚠️  {title} (ASIN: {asin}) - {reason or 'Unknown restriction'}")
 			sys.stdout.flush()
+		print()
+	
+	if not downloadable_books:
+		print("No downloadable books found that haven't been downloaded yet.")
+		sys.stdout.flush()
+		return
+	
+	print(f"Found {len(downloadable_books)} downloadable books to process.")
+	sys.stdout.flush()
+
+	for asin, title, _ in downloadable_books:
+		try:
+			print(f"Downloading audiobook with ASIN: {asin}")
+			sys.stdout.flush()
+			
+			# Update last download attempt timestamp
+			from datetime import datetime
+			timestamp = datetime.now().isoformat()
+			cur.execute('UPDATE audiobooks SET last_download_attempt = ? WHERE asin = ?', (timestamp, asin))
+			con.commit()
+			
 			# Don't capture output so we can see download progress in Docker logs
-			result = subprocess.run(["audible", "-v", "error", "download", "-a", asin[0], "--aax-fallback", "--timeout", "0", "-f", "asin_ascii", "--ignore-podcasts", "-o", audiobook_download_directory])
+			result = subprocess.run(["audible", "-v", "error", "download", "-a", asin, "--aax-fallback", "--timeout", "0", "-f", "asin_ascii", "--ignore-podcasts", "-o", audiobook_download_directory])
 			if result.returncode != 0:
-				print(f"Download failed for ASIN {asin[0]} (exit code: {result.returncode})")
+				print(f"Download failed for ASIN {asin} (exit code: {result.returncode})")
 				sys.stdout.flush()
+				
+				# If download consistently fails, check if it's actually not downloadable
+				if result.returncode == 0:  # audible-cli returns 0 even for "not downloadable" errors
+					# Try to detect "not downloadable" message in output
+					try:
+						# Run with captured output to check for restriction message
+						check_result = subprocess.run(
+							["audible", "download", "-a", asin, "--aax-fallback"], 
+							capture_output=True, text=True, timeout=30
+						)
+						if "is not downloadable" in check_result.stdout:
+							print(f"   Detected download restriction for {title} - updating database")
+							cur.execute('''
+								UPDATE audiobooks 
+								SET is_downloadable = 0, restriction_reason = ? 
+								WHERE asin = ?
+							''', ("Detected as non-downloadable during download attempt", asin))
+							con.commit()
+							sys.stdout.flush()
+					except Exception as e:
+						print(f"   Could not verify download restriction: {e}")
+						sys.stdout.flush()
+				
 				continue
 
 			# Process downloaded files
@@ -214,9 +440,9 @@ def download_new_titles():
 					
 					if asin_check is None:
 						# If the ASIN doesn't exist in our database, try to use the original one
-						if cur.execute("Select title FROM audiobooks WHERE asin=?", [asin[0]]).fetchone() is not None:
+						if cur.execute("Select title FROM audiobooks WHERE asin=?", [asin]).fetchone() is not None:
 							try:
-								new_name = audiobook.replace(new_asin, asin[0])
+								new_name = audiobook.replace(new_asin, asin)
 								shutil.move(audiobook_download_directory + "/" + audiobook, audiobook_download_directory + "/" + new_name)
 								audiobook = new_name
 								print(f"Renamed file to match database ASIN: {new_name}")
@@ -224,7 +450,7 @@ def download_new_titles():
 								print(f"Error renaming file {audiobook}: {e}")
 								continue
 						else:
-							print(f"Warning: Cannot find ASIN {new_asin} or {asin[0]} in database. Skipping file {audiobook}")
+							print(f"Warning: Cannot find ASIN {new_asin} or {asin} in database. Skipping file {audiobook}")
 							continue
 
 					current_asin = audiobook.split("_")[0]
@@ -329,6 +555,9 @@ def main():
 		
 		# First, update library from Audible
 		update_titles()
+		
+		# Check downloadability for new books
+		check_downloadability()
 		
 		# Run integrity verification and auto-fix before downloading
 		run_integrity_check_and_fix()
